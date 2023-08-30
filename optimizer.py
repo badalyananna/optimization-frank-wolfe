@@ -59,7 +59,7 @@ class FW_SSC:
         self.of_value = self.calc_obj_function(edges)
         K = len(edges[0])
         self.tau *= 1 / (K * (K - 1))
-        self.L = 1
+        self.L = 0.1
 
         max_iter, tolerance, variant = self.max_iter, self.tolerance, self.variant
         
@@ -121,13 +121,13 @@ class FW_SSC:
                 d, gamma_max = self._blended_pairwise_update(grad, s, y, duality_gap)
             else:
                 raise NotImplementedError("Unknown FW variant")
-            if (d == 0).all():
-                print('global minimum')
-                self.L = L
-                return y, True
+
             print(f'd {d}')
             # Phase 2
             beta, L = self.backtracking_step_size(edges, y, d, grad, L, duality_gap, gamma_max)
+            if beta == 0:
+                self.L = L
+                return y, False
             print(f'inner L, beta, gamma_max {L, beta, gamma_max}')
             y += beta * d
             #print(beta, gamma_max)
@@ -140,18 +140,26 @@ class FW_SSC:
     def backtracking_step_size(self, edges, y, d, grad, L_prev, duality_gap, gamma_max, tau=1.5, nu = 1):
         def Q_t(of_value, gamma, duality_gap, M, d):
             return of_value - gamma * duality_gap + ((gamma ** 2) * M  * (np.linalg.norm(d) ** 2) )/ 2
+        def Q_t_withoutM(of_value, gamma, gap):
+            return of_value - gamma * gap / 2
         
         grad_d = - grad @ d
+        # check if d is global
+        initial_of_value = self.calc_obj_function(edges, y)
+        gamma_min = 1e-10
+        if self.calc_obj_function(edges, y + gamma_min * d) > Q_t_withoutM(initial_of_value, gamma_min, grad_d):
+            return 0, L_prev
+
         print(f'grad d {grad_d}')
         M = nu * L_prev
         d_norm_squared = np.linalg.norm(d) ** 2
         gamma = grad_d / (M * d_norm_squared)
         print(f"backtracking gamma estimate {gamma}, gamma_max {gamma_max}")
         gamma = min(gamma_max, gamma)
-        initial_of_value = self.calc_obj_function(edges, y)
+        
         while self.calc_obj_function(edges, y + gamma * d) > Q_t(initial_of_value, gamma, grad_d, M, d):
             print(f"Backtracking gamma {gamma}, o.f. {self.calc_obj_function(edges, y + gamma * d)}, Q_t {Q_t(initial_of_value, gamma, grad_d, M, d)}")
-            print(f"Initial of value {initial_of_value}")
+            print(f"Initial of value {initial_of_value}, Q_t withour M {Q_t_withoutM(initial_of_value, gamma, grad_d)}")
             print(f'M {M}')
             M *= tau
             gamma_new = grad_d / (M * d_norm_squared)
@@ -324,23 +332,16 @@ class FW:
         }
         start_time = time.time()
         for iter in range(max_iter):
+            self.training_iter = iter
             s, d_fw, grad, duality_gap = self._global_step(edges)
             self.history["duality_gap"].append(-duality_gap)
             if duality_gap >= -tolerance:
                 self.trained = True
                 self.tolerance_reached = True
-                self.training_iter = iter
                 break
-            if variant == 'FW':
-                self.x, self.of_value = self._classic_update(edges, d_fw, duality_gap, iter)
-            elif variant == 'AFW':
-                self.x, self.of_value = self._away_step_update(edges, grad, d_fw, duality_gap)
-            elif variant == 'PFW':
-                self.x, self.of_value = self._pairwise_update(edges, grad, s, duality_gap)
-            elif variant == 'BPFW':
-                self.x, self.of_value = self._blended_pairwise_update(edges, grad, s, duality_gap)
-            else:
-                raise NotImplementedError("Currently ony classic, pairwise and blended_pairwise FW variants are available")
+            
+            self.x, self.of_value = self._FW_step(edges, grad, d_fw, s, duality_gap)
+
             iter_time = time.time()
             self.history["iteration"].append(iter)
             self.history["of_value"].append(self.of_value)
@@ -360,31 +361,28 @@ class FW:
         duality_gap = grad @ d_fw
         return s, d_fw, grad, duality_gap   
 
-    def _classic_update(
+    def _FW_step(
         self, 
         edges: List[List[int]],
+        grad: np.ndarray,
         d_fw: np.ndarray,
+        s: np.ndarray,
         duality_gap: float,
-        iter: int,
     ) -> Tuple[np.ndarray, float]:
-        stepsize_strategy = self.stepsize_strategy
-        if stepsize_strategy == 'armijo':
-            x_new, of_new, gamma = self.armijo(d_fw, duality_gap, edges)
-            return x_new, of_new
-        elif stepsize_strategy == 'armijo_decreasing':
-            x_new, of_new, gamma = self.armijo(d_fw, duality_gap, edges)
-            self.gamma_max = gamma
-            return x_new, of_new
-        elif stepsize_strategy == 'decreasing':
-            x = self.x
-            gamma = 2 / (3 + iter)
-            x_new = x + gamma * d_fw
-            of_new = self.calc_obj_function(edges, x_new)
-            return x_new, of_new
+        if self.variant == 'FW':
+            d, gap, gamma_max = (d_fw, duality_gap, 1)
+        elif self.variant == 'AFW':
+            d, gap, gamma_max = self._away_step(grad, d_fw, duality_gap) 
+        elif self.variant == 'PFW':
+            d, gap, gamma_max = self._pairwise_step(grad, s)
+        elif self.variant == 'BPFW':
+            d, gap, gamma_max = self._blended_pairwise_step(grad, s, duality_gap)
+        else:
+            raise NotImplementedError("Currently ony classic, pairwise and blended_pairwise FW variants are available")
+        return self._choose_stepsize(edges, d, gap, gamma_max)
         
-    def _away_step_update(
+    def _away_step(
         self,
-        edges: List[List[int]],
         grad: np.ndarray,
         d_fw: np.ndarray,
         duality_gap: float,
@@ -394,43 +392,32 @@ class FW:
         v, v_index = LMO(grad, active_set=active_set, task='maximize')
         d_a = x - v
         away_gap = grad @ d_a
-        if - duality_gap >= - away_gap: # they are negative, that's why it's a less sign
+        if - duality_gap >= - away_gap:
             d = d_fw
-            self.gamma_max = 1
+            gamma_max = 1
             gap = duality_gap
         else:
             d = d_a
             alpha_v = x[v_index]
-            self.gamma_max = alpha_v / (1 - alpha_v)
+            gamma_max = alpha_v / (1 - alpha_v)
             gap = away_gap
-        x_new, of_new, gamma = self.armijo(d, gap, edges)
-        return x_new, of_new
+        return d, gap, gamma_max
 
-    def _pairwise_update(
+    def _pairwise_step(
         self,
-        edges: List[List[int]],
         grad: np.ndarray,
         s: np.ndarray,
-        duality_gap: float,
     ) -> Tuple[np.ndarray, float]:
         x = self.x
         active_set = np.where(x > 0)[0].tolist()
         v, v_index = LMO(grad, active_set=active_set, task='maximize')
         d_pw = s - v
-        self.gamma_max = x[v_index]
-        if self.stepsize_strategy == 'armijo':
-            gap = grad @ d_pw
-            x_new, of_new, gamma = self.armijo(d_pw, gap, edges)
-        elif self.stepsize_strategy == 'backtracking':
-            gamma, self.L = self.backtracking_step_size(edges, x, d_pw, duality_gap, self.L, self.gamma_max)
-            print(f'backtracking results gamma_max {self.gamma_max}, gamma {gamma}, L {self.L}')
-            x_new = x + gamma * d_pw
-            of_new = self.calc_obj_function(edges, x_new)
-        return x_new, of_new
+        gamma_max = x[v_index]
+        gap = grad @ d_pw
+        return d_pw, gap, gamma_max
 
-    def _blended_pairwise_update(
+    def _blended_pairwise_step(
         self,
-        edges: List[List[int]],
         grad: np.ndarray,
         s: np.ndarray,
         duality_gap: float,
@@ -443,16 +430,43 @@ class FW:
         if local_gap >= - duality_gap:
             # optimize localy over the active set
             d = w - a
-            self.gamma_max = x[a_index]
+            gamma_max = x[a_index]
             gap = grad @ d
-            x_new, of_new, gamma = self.armijo(d, gap, edges)
-            return x_new, of_new
         else:
-            print('global step')
             d = s - x
-            self.gamma_max = 1
-            x_new, of_new, gamma = self.armijo(d, duality_gap, edges)
-            return x_new, of_new 
+            gamma_max = 1
+            gap = duality_gap
+        return d, gap, gamma_max
+    
+    def _choose_stepsize(self,
+            edges: List[List[int]],
+            d: np.ndarray, 
+            gap: float,
+            gamma_max: float,
+            ) -> Tuple[np.ndarray, float, float]:
+        """Function to choose the step size according to the selected strategy."""
+        stepsize_strategy = self.stepsize_strategy
+        if stepsize_strategy == 'armijo':
+            self.gamma_max = gamma_max
+            return self.armijo(edges, d, gap)
+        elif stepsize_strategy == 'armijo decreasing':
+            self.gamma_max = min(self.gamma_max, gamma_max)
+            return self.armijo(edges, d, gap)
+        elif stepsize_strategy == 'backtracking':
+            x = self.x
+            self.gamma_max = gamma_max
+            gamma = self.backtracking_classic(edges, d, gap)
+            x += gamma * d
+            return x, self.calc_obj_function(edges, x)
+        elif stepsize_strategy == 'decreasing':
+            assert self.variant == 'FW', 'Decreasing step size is possible only for the classic FW'
+            x, iter = self.x, self.training_iter
+            gamma = 2 / (3 + iter)
+            x = x + gamma * d
+            of_new = self.calc_obj_function(edges, x)
+            return x, of_new
+        else:
+            raise NotImplementedError('The stepsize strategy is not implemented.')
     
     def calc_obj_function(self, edges: List[List[int]], x: Optional[np.ndarray] = None) -> np.ndarray:
         tau = self.tau
@@ -479,26 +493,33 @@ class FW:
             grad[i] = remaining_products[hg_indices == i].sum()
         return grad + tau * k * (x ** (k - 1))
     
-    def backtracking_step_size(self, edges, y, d, duality_gap, L_prev, gamma_max, tau=1.5, nu = 1):
-        def Q_t(of_value, gamma, duality_gap, M, d):
-            return of_value + gamma * duality_gap + ((gamma ** 2) * M  * np.linalg.norm(d) ** 2 )/ 2
-
-        M = nu * L_prev
-        gamma = - duality_gap / (M * np.linalg.norm(d) ** 2)
-        print(f'backtracking gamma estimate {gamma}')
+    def backtracking_classic(self, 
+            edges: List[List[int]], 
+            d: np.ndarray, 
+            gap: float, 
+            tau: Optional[float]=1.5, 
+            nu: Optional[float] = 1.0) -> Tuple[np.ndarray, float, float]:
+        
+        def Q_t(of_value, gamma, gap, M, d_norm_squared):
+            return of_value + gamma * gap + ((gamma ** 2) * M  * d_norm_squared)/ 2
+        
+        x, L_prev, gamma_max = self.x, self.L, self.gamma_max
+        L = nu * L_prev
+        d_norm_squared = np.linalg.norm(d) ** 2
+        gamma = - gap / (L * d_norm_squared)
         gamma = min(gamma_max, gamma)
-        initial_of_value = self.calc_obj_function(edges, y)
-        while self.calc_obj_function(edges, y + gamma * d) > Q_t(initial_of_value, gamma, duality_gap, M, d):
-            print(f"Backtracking gamma {gamma}, o.f. {self.calc_obj_function(edges, y + gamma * d)}, Q_t {Q_t(initial_of_value, gamma, duality_gap, M, d)}")
-            M *= tau
-            gamma_new = - duality_gap / (M * np.linalg.norm(d) ** 2)
+        initial_of_value = self.calc_obj_function(edges, x)
+        while self.calc_obj_function(edges, x + gamma * d) > Q_t(initial_of_value, gamma, gap, L, d_norm_squared):
+            L *= tau
+            gamma_new = - gap / (L * d_norm_squared)
             gamma = min(gamma_new, gamma_max)
-        return gamma, M
+        self.L = L
+        return gamma
     
     def armijo(self,
+            edges: List[List[int]],
             d: np.ndarray, 
-            gap: float,
-            edges: List[List[int]]) -> Tuple[np.ndarray, float, float]:
+            gap: float,) -> Tuple[np.ndarray, float, float]:
         """
         Implements Armijo line search
 
@@ -525,7 +546,8 @@ class FW:
             x_new = x_old + gamma * d
             of_new = self.calc_obj_function(edges, x_new)
             assert m < 10000, "Armijo made 10 000 iteration, something must be wrong"
-        return x_new, of_new, gamma
+        self.gamma_max = gamma
+        return x_new, of_new
     
 def LMO(grad: np.ndarray, active_set: Optional[list] = None, task: Optional[str] = 'minimize') -> np.ndarray:
     """
