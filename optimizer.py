@@ -9,7 +9,7 @@ class FW:
     """
     def __init__(
         self,
-        variant: Optional[str] = "clasic",
+        variant: Optional[str] = "FW",
         stepsize_strategy: Optional[str] = "armijo",
         ssc_procedure: Optional[bool] = False,
         linesearch_args: Optional[Dict] = None,
@@ -18,14 +18,28 @@ class FW:
         tolerance: Optional[float] = 1e-4,
         max_iter: Optional[int] = 10000, 
     ):
-        """ #TODO write a description
+        """
+        Initializes the FW optimizer
 
         Parameters
         ----------
-        x: value of x at the current iteration
+        variant: the FW variant. The following variants are implemented: 
+            'FW': classical FW
+            'AFW': away step FW
+            'PFW': pairwise FW
+            'BPFW': blended pairwise FW
+        stepsize_strategy: The following stepsize strategies are implemented:
+            'decresing': the value of gamma equal to 2 / (K + 2), available only for classic FW
+            'armijo': armijo line search. Not available for the SSC procedure.
+            'armijo decreasing': same as armijo line search, but the step size searhc starts from the value of the previous iteration.
+            'backtracking': the backtracking procedure
+        linesearch_args: The dictionary with the arguments for the line search.
+            If not provided the default values are used.
+        x: the initial value of x. If not provided, it is initialized at random.
         tau: parameter of the objective function
-        alpha: armijo search parameter (gamma in lecture notes)
-        delta: decrease rate of the armijo line search
+            The maximum value of tau is 1 / (k * (k -1)). This parameter is the proportion of the maximum value.
+        tolerance: the desired duality_gap to be reached
+        max_iter: maximum number of iterations allowed
         """
         super().__init__()
         self.variant = variant
@@ -67,7 +81,17 @@ class FW:
         N: Optional[int] = None,
         seed: Optional[int] = None,
     ):
-        # initialize x if the value has not been provided
+        """
+        Implements the FW optimization algorithms as described in the following papers:
+        'FW': 
+        #TODO
+
+        Parameters
+        ----------
+        edges: the list of complementary hyperedges of the k-uniform hypergraph
+        N: the number of nodes in the hypergraph
+        seed: random seed
+        """
         if N is None:
             N = max(map(max, edges)) + 1
         if self.x is None:
@@ -76,7 +100,7 @@ class FW:
         K = len(edges[0])
         self.tau *= 1 / (K * (K - 1))
 
-        max_iter, tolerance, variant = self.max_iter, self.tolerance, self.variant
+        max_iter, tolerance = self.max_iter, self.tolerance
         
         self.history = {
             "iteration": [0],
@@ -105,12 +129,14 @@ class FW:
             self.history["cpu_time"].append(iter_time - start_time)
 
     def _init_x(self, N: int, seed: Optional[int] = None):
+        """Randomly initializes x."""
         rng = np.random.default_rng(seed)
         x = rng.random(N)
         x = x / x.sum()
         return x
     
-    def _global_step(self, edges: List[List[int]]) -> Tuple[np.ndarray, np.ndarray, float]:
+    def _global_step(self, edges: List[List[int]]) -> Tuple[np.ndarray, np.ndarray, np.ndarray, float]:
+        """Performs the global step of the FW algorithm."""
         x = self.x
         grad = self.calc_gradient(edges)
         s = LMO(grad)
@@ -126,6 +152,7 @@ class FW:
         s: np.ndarray,
         duality_gap: float,
     ) -> Tuple[np.ndarray, float]:
+        """Performs the FW step according the variant."""
         x = self.x
         if self.variant == 'FW':
             d, gap, gamma_max = (d_fw, duality_gap, 1)
@@ -146,7 +173,7 @@ class FW:
         s: np.ndarray,
         duality_gap: float,
     ) -> Tuple[np.ndarray, float]:
-        """Implements one iteration with SSC procedure"""
+        """Implements one iteration with SSC procedure."""
         y = self.x
         of_value = self.of_value
         L = self.L
@@ -180,6 +207,7 @@ class FW:
         duality_gap: float,
         x: np.ndarray,
     ) -> Tuple[np.ndarray, float]:
+        """Finds the away step direction of the FW algorithm."""
         active_set = np.where(x > 0)[0].tolist()
         v, v_index = LMO(grad, active_set=active_set, task='maximize')
         d_a = x - v
@@ -201,6 +229,7 @@ class FW:
         s: np.ndarray,
         x: np.ndarray,
     ) -> Tuple[np.ndarray, float]:
+        """Finds the pairwise direction of the FW algorithm."""
         active_set = np.where(x > 0)[0].tolist()
         v, v_index = LMO(grad, active_set=active_set, task='maximize')
         d_pw = s - v
@@ -215,6 +244,7 @@ class FW:
         duality_gap: float,
         x: np.ndarray,
     ) -> Tuple[np.ndarray, float]:
+        """Finds the blended pairwise direction of the FW algorithm."""
         active_set = np.where(x > 0)[0].tolist()
         a, a_index = LMO(grad, active_set=active_set, task='maximize') # away step
         w, w_index = LMO(grad, active_set=active_set, task='minimize') # local FW step
@@ -236,7 +266,7 @@ class FW:
         gap: float,
         gamma_max: float,
     ) -> Tuple[np.ndarray, float, float]:
-        """Function to choose the step size according to the selected strategy."""
+        """Chooses the step size according to the selected strategy."""
         stepsize_strategy = self.stepsize_strategy
         if stepsize_strategy == 'armijo':
             return self.armijo(edges, d, gap, gamma_max)
@@ -258,6 +288,7 @@ class FW:
             raise NotImplementedError('The stepsize strategy is not implemented.')
     
     def calc_obj_function(self, edges: List[List[int]], x: Optional[np.ndarray] = None) -> np.ndarray:
+        """Calculated the value of the objective function."""
         tau = self.tau
         if x is None:
             x = self.x
@@ -266,6 +297,7 @@ class FW:
         return LG + tau * (x ** k).sum()
 
     def calc_gradient(self, edges: List[List[int]]) -> np.ndarray:
+        """Calculates the value of the gradient."""
         x, tau = self.x, self.tau
         N = len(x)
 
@@ -287,13 +319,33 @@ class FW:
         d: np.ndarray, 
         gap: float,
         gamma_max: np.ndarray,
-        y: Optional[np.ndarray] = None,
+        x: Optional[np.ndarray] = None,
         of_value_old: Optional[np.ndarray] = None,
-    ) -> Tuple[np.ndarray, float, float]:
+    ) -> Tuple[np.ndarray, float, float, float]:
+        """
+        Implements backtracking line search with the estimation of the Lipscitz constant of the gradient
+
+        Paramters
+        ---------
+        edges: the complement hyperedges of the hypergraph
+        d: the descent direction provided by FW algorithm
+        gap: the current duality gap with the diven direction and current value of x
+        gamma_max: maximum allowed value of gamma
+        x: current value of x, if not provided the value of the last iteration is taked
+        of_value_old: the value of the objecive function corresponding to the, if not provided
+            the value of the o.f. of the last iteration is taken
+
+        Returns
+        -------
+        x_new: new value of x
+        of_value_new: new value of the o.f.
+        gamma: the value of gamma used
+        L: the estimate for the Lipschitz constant
+        """
         
         def Q_t(of_value, gamma, gap, M, d_norm_squared):
             return of_value + gamma * gap + ((gamma ** 2) * M  * d_norm_squared)/ 2
-        x = self.x if y is None else y
+        x = self.x if x is None else x
         of_value_old = self.of_value if of_value_old is None else of_value_old
 
         L_prev, tau, nu = self.L, self.bt_inc, self.bt_dec
@@ -320,8 +372,8 @@ class FW:
         of_value_old: np.ndarray,
         gamma_min: Optional[float] = 1e-6,
     ) -> bool:
+        """Checks if the current value of y in the SSC procedure is the global minimum."""
         if self.calc_obj_function(edges, y + gamma_min * d) > (of_value_old + gamma_min * gap / 2):
-            #print('global maximum')
             return True
         else:
             return False
@@ -330,15 +382,16 @@ class FW:
             edges: List[List[int]],
             d: np.ndarray, 
             gap: float,
-            gamma_max: np.ndarray,) -> Tuple[np.ndarray, float, float]:
+            gamma_max: np.ndarray,) -> Tuple[np.ndarray, float]:
         """
         Implements Armijo line search
 
         Paremeters
         ----------
-        d: the descent direction of the algorithm
-        duality_gap: the duality gap at the current iteration of the algorithm
         edges: list of lists containing the id of the nodes belinging to edges
+        d: the descent direction of the algorithm
+        gap: the duality gap at the current iteration of the algorithm
+        
 
         Returns
         -------
@@ -364,6 +417,17 @@ def LMO(grad: np.ndarray, active_set: Optional[list] = None, task: Optional[str]
     """
     Takes the gradient and returns a vector of the same dimentions 
     in the unit simplex that minimizes the product with the gradient.
+
+    Parameters
+    ----------
+    grad: the gradient
+    active_set: if not None, the optimization is done over the active set
+    task: 'minimize' or 'maximize'
+
+    Returns
+    -------
+    s: a vector that minimizer/maximizes the product with the gradient
+    s_index: an index of non-zero coordinate of the vector
     """
     s = np.zeros(grad.shape)
     if active_set is None:
