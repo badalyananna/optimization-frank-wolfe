@@ -12,8 +12,7 @@ class FW:
         variant: Optional[str] = "clasic",
         stepsize_strategy: Optional[str] = "armijo",
         ssc_procedure: Optional[bool] = False,
-        alpha: Optional[float] = 0.1, # armijo search param
-        delta: Optional[float] = 0.7, # armijo search param
+        linesearch_args: Optional[Dict] = None,
         tau: Optional[float] = 1.0,
         x: Optional[np.ndarray] = None,
         tolerance: Optional[float] = 1e-4,
@@ -35,10 +34,25 @@ class FW:
         self.x = x
         # parameters related to line search
         self.stepsize_strategy = stepsize_strategy
-        self.alpha = alpha
-        self.delta = delta
         self.gamma_max = 1.0
         self.of_value = None
+
+        if stepsize_strategy == 'armijo':
+            if linesearch_args == None:
+                self.alpha = 0.1
+                self.delta = 0.7
+            else:
+                self.alpha = linesearch_args['alpha']
+                self.delta = linesearch_args['delta']
+        elif stepsize_strategy == 'backtracking':
+            if linesearch_args == None:
+                self.L = 0.1
+                self.bt_inc =1.5
+                self.bt_dec = 1.0
+            else:
+                self.L = linesearch_args['L']
+                self.bt_inc = linesearch_args['tau']
+                self.bt_dec = linesearch_args['nu']
 
         self.tolerance = tolerance
         self.max_iter = max_iter
@@ -61,7 +75,6 @@ class FW:
         self.of_value = self.calc_obj_function(edges)
         K = len(edges[0])
         self.tau *= 1 / (K * (K - 1))
-        self.L = 0.1
 
         max_iter, tolerance, variant = self.max_iter, self.tolerance, self.variant
         
@@ -136,7 +149,7 @@ class FW:
         """Implements one iteration with SSC procedure"""
         y = self.x
         of_value = self.of_value
-        L = 0.1
+        L = self.L
         iter = 0
         while True:
             iter += 1
@@ -151,8 +164,11 @@ class FW:
                 d, gap, gamma_max = self._blended_pairwise_step(grad, s, duality_gap, y)
             else:
                 raise NotImplementedError("This variant is currently not supported for the SSC procedure.")
+            
+            if self._global_maximum_reached(edges, d, gap, y, of_value):
+                return y, of_value
 
-            beta, L, y, of_value = self.backtracking_ssc(edges, d, gap, y, of_value, L, gamma_max)
+            y, of_value, beta, L = self.backtracking(edges, d, gap, gamma_max, y, of_value)
             if beta < gamma_max:
                 return y, of_value
             assert iter < 1000, "The while loop in SSC exceeded 1000 iterations."
@@ -223,15 +239,14 @@ class FW:
         """Function to choose the step size according to the selected strategy."""
         stepsize_strategy = self.stepsize_strategy
         if stepsize_strategy == 'armijo':
-            self.gamma_max = gamma_max
-            return self.armijo(edges, d, gap)
+            return self.armijo(edges, d, gap, gamma_max)
         elif stepsize_strategy == 'armijo decreasing':
-            self.gamma_max = min(self.gamma_max, gamma_max)
-            return self.armijo(edges, d, gap)
+            gamma_max = min(self.gamma_max, gamma_max)
+            return self.armijo(edges, d, gap, gamma_max)
         elif stepsize_strategy == 'backtracking':
-            x = self.x
-            self.gamma_max = gamma_max
-            return self.backtracking_classic(edges, d, gap)
+            x_new, of_new, gamma, L = self.backtracking(edges, d, gap, gamma_max)
+            self.L = L
+            return x_new, of_new
         elif stepsize_strategy == 'decreasing':
             assert self.variant == 'FW', 'Decreasing step size is possible only for the classic FW'
             x, iter = self.x, self.training_iter
@@ -267,18 +282,21 @@ class FW:
             grad[i] = remaining_products[hg_indices == i].sum()
         return grad + tau * k * (x ** (k - 1))
     
-    def backtracking_classic(self, 
+    def backtracking(self, 
         edges: List[List[int]], 
         d: np.ndarray, 
-        gap: float, 
-        tau: Optional[float]=1.5, 
-        nu: Optional[float] = 1.0
+        gap: float,
+        gamma_max: np.ndarray,
+        y: Optional[np.ndarray] = None,
+        of_value_old: Optional[np.ndarray] = None,
     ) -> Tuple[np.ndarray, float, float]:
         
         def Q_t(of_value, gamma, gap, M, d_norm_squared):
             return of_value + gamma * gap + ((gamma ** 2) * M  * d_norm_squared)/ 2
-        
-        x, L_prev, gamma_max, of_value_old = self.x, self.L, self.gamma_max, self.of_value
+        x = self.x if y is None else y
+        of_value_old = self.of_value if of_value_old is None else of_value_old
+
+        L_prev, tau, nu = self.L, self.bt_inc, self.bt_dec
         L = nu * L_prev
         d_norm_squared = np.linalg.norm(d) ** 2
         gamma = - gap / (L * d_norm_squared)
@@ -291,55 +309,28 @@ class FW:
             gamma = min(gamma_new, gamma_max)
             x_new = x + gamma * d
             of_value_new = self.calc_obj_function(edges, x_new)
-        self.L = L
-        return x_new, of_value_new
+        return x_new, of_value_new, gamma, L
     
-    def backtracking_ssc(self, 
-        edges: List[List[int]], 
+    def _global_maximum_reached(
+        self,
+        edges: List[List[int]],
         d: np.ndarray, 
         gap: float,
         y: np.ndarray,
         of_value_old: np.ndarray,
-        L_prev: np.ndarray,
-        gamma_max: np.ndarray,
-        tau: Optional[float]=1.5, 
-        nu: Optional[float] = 1.0
-    ) -> Tuple[np.ndarray, float, float]:
-        
-        def Q_t(of_value, gamma, gap, M, d_norm_squared):
-            return of_value + gamma * gap + ((gamma ** 2) * M  * d_norm_squared)/ 2
-        
-        def Q_t_withoutM(of_value, gamma, gap):
-            return of_value + gamma * gap / 2
-   
-        # check if d is global
-        gamma_min = 1e-6
-        if self.calc_obj_function(edges, y + gamma_min * d) > Q_t_withoutM(of_value_old, gamma_min, gap):
+        gamma_min: Optional[float] = 1e-6,
+    ) -> bool:
+        if self.calc_obj_function(edges, y + gamma_min * d) > (of_value_old + gamma_min * gap / 2):
             #print('global maximum')
-            return 0, L_prev, y, of_value_old
-        
-        L = nu * L_prev
-        d_norm_squared = np.linalg.norm(d) ** 2
-        gamma = - gap / (L * d_norm_squared)
-        gamma = min(gamma_max, gamma)
-        y_new = y + gamma * d
-        of_value_new = self.calc_obj_function(edges, y_new)
-        i = 1
-        while of_value_new > Q_t(of_value_old, gamma, gap, L, d_norm_squared):
-            L *= tau
-            gamma_new = - gap / (L * d_norm_squared)
-            gamma = min(gamma_new, gamma_max)
-            #print(gamma)
-            y_new = y + gamma * d
-            of_value_new = self.calc_obj_function(edges, y_new)
-            i += 1
-            assert i < 50, "Too many backtracking iterations."
-        return gamma, L, y_new, of_value_new
+            return True
+        else:
+            return False
     
     def armijo(self,
             edges: List[List[int]],
             d: np.ndarray, 
-            gap: float,) -> Tuple[np.ndarray, float, float]:
+            gap: float,
+            gamma_max: np.ndarray,) -> Tuple[np.ndarray, float, float]:
         """
         Implements Armijo line search
 
@@ -354,7 +345,7 @@ class FW:
         x_new: the new value x
         of_new: the new value of the o.f. at x_new
         """
-        x_old, alpha, delta, of_old, gamma_max = self.x, self.alpha, self.delta, self.of_value, self.gamma_max
+        x_old, alpha, delta, of_old = self.x, self.alpha, self.delta, self.of_value
 
         gamma = gamma_max
         x_new = x_old + gamma * d
