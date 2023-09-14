@@ -6,14 +6,14 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-def process_dataset(path: str, k: int) -> Tuple[int, List[List], List[List]]:
+def process_dataset(dataset: str, k: int) -> Tuple[int, List[List], List[List]]:
     """
     Takes the path to the network dataset and returns hyperedges of a k-uniform.
     Nodes form a k-hyperedge is there are at least k connections between them
 
     Parameters
     ----------
-    path: path to the dataset file
+    dataset: dataset name
     k: numer of nodes in a hyperedge
 
     Returns
@@ -22,6 +22,7 @@ def process_dataset(path: str, k: int) -> Tuple[int, List[List], List[List]]:
     2 lists of lists containing hyperedges and nodes of a k-uniform hypergraph and 
     the complement hypergraph
     """
+    path = f'instances/{dataset}.clq.txt'
     with open(path) as file:
         edges = [tuple(map(int, line.rstrip()[2:].split(' '))) for line in file if line[0] == 'e']
 
