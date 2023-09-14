@@ -12,7 +12,7 @@ class FW:
         variant: Optional[str] = "FW",
         stepsize_strategy: Optional[str] = "armijo",
         ssc_procedure: Optional[bool] = False,
-        linesearch_args: Optional[Dict] = None,
+        linesearch_args: Optional[Dict] = dict(),
         tau: Optional[float] = 1.0,
         x: Optional[np.ndarray] = None,
         tolerance: Optional[float] = 1e-4,
@@ -23,8 +23,8 @@ class FW:
 
         Parameters
         ----------
-        variant: the FW variant. The following variants are implemented: 
-            'FW': classical FW
+        variant: the FW variant. The following variants are implemented: #TODO add papers
+            'FW': classic FW
             'AFW': away step FW
             'PFW': pairwise FW
             'BPFW': blended pairwise FW
@@ -52,21 +52,12 @@ class FW:
         self.of_value = None
 
         if stepsize_strategy == 'armijo':
-            if linesearch_args == None:
-                self.alpha = 0.1
-                self.delta = 0.7
-            else:
-                self.alpha = linesearch_args['alpha']
-                self.delta = linesearch_args['delta']
+            self.alpha = linesearch_args['alpha'] if 'alpha' in linesearch_args else 0.1
+            self.delta = linesearch_args['delta'] if 'delta' in linesearch_args else 0.7
         elif stepsize_strategy == 'backtracking':
-            if linesearch_args == None:
-                self.L = 0.1
-                self.bt_inc =1.5
-                self.bt_dec = 1.0
-            else:
-                self.L = linesearch_args['L']
-                self.bt_inc = linesearch_args['tau']
-                self.bt_dec = linesearch_args['nu']
+            self.L = linesearch_args['L'] if 'L' in linesearch_args else 0.1
+            self.bt_inc = linesearch_args['tau'] if 'tau' in linesearch_args else 1.5
+            self.bt_dec = linesearch_args['nu'] if 'nu' in linesearch_args else 1.0
 
         self.tolerance = tolerance
         self.max_iter = max_iter
@@ -82,9 +73,7 @@ class FW:
         seed: Optional[int] = None,
     ):
         """
-        Implements the FW optimization algorithms as described in the following papers:
-        'FW': 
-        #TODO
+        Implements the FW optimization algorithms.
 
         Parameters
         ----------
@@ -195,7 +184,7 @@ class FW:
             if self._global_maximum_reached(edges, d, gap, y, of_value):
                 return y, of_value
 
-            y, of_value, beta, L = self.backtracking(edges, d, gap, gamma_max, y, of_value)
+            y, of_value, beta, L = self.backtracking(edges, d, gap, gamma_max, L, y, of_value)
             if beta < gamma_max:
                 return y, of_value
             assert iter < 1000, "The while loop in SSC exceeded 1000 iterations."
@@ -255,6 +244,7 @@ class FW:
             gamma_max = x[a_index]
             gap = grad @ d
         else:
+            print('global step')
             d = s - x
             gamma_max = 1
             gap = duality_gap
@@ -274,7 +264,7 @@ class FW:
             gamma_max = min(self.gamma_max, gamma_max)
             return self.armijo(edges, d, gap, gamma_max)
         elif stepsize_strategy == 'backtracking':
-            x_new, of_new, gamma, L = self.backtracking(edges, d, gap, gamma_max)
+            x_new, of_new, gamma, L = self.backtracking(edges, d, gap, gamma_max, self.L)
             self.L = L
             return x_new, of_new
         elif stepsize_strategy == 'decreasing':
@@ -319,6 +309,7 @@ class FW:
         d: np.ndarray, 
         gap: float,
         gamma_max: np.ndarray,
+        L_prev: float,
         x: Optional[np.ndarray] = None,
         of_value_old: Optional[np.ndarray] = None,
     ) -> Tuple[np.ndarray, float, float, float]:
@@ -348,7 +339,7 @@ class FW:
         x = self.x if x is None else x
         of_value_old = self.of_value if of_value_old is None else of_value_old
 
-        L_prev, tau, nu = self.L, self.bt_inc, self.bt_dec
+        tau, nu = self.bt_inc, self.bt_dec
         L = nu * L_prev
         d_norm_squared = np.linalg.norm(d) ** 2
         gamma = - gap / (L * d_norm_squared)
