@@ -113,7 +113,7 @@ class FW:
                 self.x, self.of_value = self._FW_step(edges, grad, d_fw, s, duality_gap)
 
             iter_time = time.time()
-            self.history["iteration"].append(iter)
+            self.history["iteration"].append(iter+1)
             self.history["of_value"].append(self.of_value)
             self.history["cpu_time"].append(iter_time - start_time)
 
