@@ -350,9 +350,11 @@ class FW:
         while of_value_new > Q_t(of_value_old, gamma, gap, L, d_norm_squared):
             L *= tau
             gamma_new = - gap / (L * d_norm_squared)
+            gamma_old = gamma
             gamma = min(gamma_new, gamma_max)
-            x_new = x + gamma * d
-            of_value_new = self.calc_obj_function(x_new)
+            if gamma != gamma_old:
+                x_new = x + gamma * d
+                of_value_new = self.calc_obj_function(x_new)
         return x_new, of_value_new, gamma, L
     
     def _global_maximum_reached(
