@@ -1,7 +1,8 @@
-from itertools import combinations
-from typing import List, Tuple, Optional
+from itertools import combinations, chain
+from typing import List, Tuple, Optional, Union
 
 import numpy as np
+from scipy import sparse
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -60,11 +61,11 @@ def process_dataset(dataset: str, k: int) -> Tuple[int, List[List], List[List]]:
                 complement_hyperedges.append(comb)
         return n, hyperedges, complement_hyperedges
     
-def plot_hisotry(df: pd.DataFrame, seed: int, ssc: Optional[bool]=False):
+def plot_hisotry(df: pd.DataFrame, seed: int, ssc: Optional[bool]=False, size: Optional[int]=8, title: Optional[bool]=True):
     """The function to plot the history of the specific run of the algorithm based on seed.
     The plots the ssc=True plot the dashed line for the run with SSC procedure."""
     
-    fig, axes = plt.subplots(nrows=2, ncols=2, figsize=(8, 8), sharex='col', sharey='row')
+    fig, axes = plt.subplots(nrows=2, ncols=2, figsize=(size, size), sharex='col', sharey='row')
     dfs = df[df.seed==seed]
     assert len(dfs) > 0, "The dataframe is empty. Probably the seed doesn't exist"
     for i in range(2):
@@ -85,11 +86,39 @@ def plot_hisotry(df: pd.DataFrame, seed: int, ssc: Optional[bool]=False):
             ax.set_ylabel(y_name)
             ax.set_xlabel(x_name)
     if ssc:
-        fig.legend(handles, labels, loc="center left", bbox_to_anchor=(1.0, 0.5), frameon=False)
-        fig.suptitle('Performance of FW variants with and without SSC procedure', fontsize=14, y=1)
+        fig.legend(handles, labels, loc="upper right", frameon=False)
+        if title: fig.suptitle('Performance of FW variants with and without SSC procedure', fontsize=12, y=0.95)
     else:
-        fig.legend(handles, labels, title='Variants', loc="center left", bbox_to_anchor=(1.0, 0.5), frameon=False)
-        fig.suptitle('Performance of FW variants', fontsize=14, y=1)
+        fig.legend(handles, labels, title='Variant', loc="upper right", frameon=False)
+        if title: fig.suptitle('Performance of FW variants', fontsize=12, y=0.95)
 
     plt.tight_layout()  # Adjust spacing between subplots
     plt.show()
+
+
+def hye_list_to_binary_incidence(
+    hye_list: List[List[int]],
+    shape: Tuple[int],
+    data: Optional[np.ndarray] = None,
+) -> sparse.spmatrix:
+    """Convert a list of hyperedges into a scipy sparse csr array.
+
+    Parameters
+    ----------
+    hye_list: the list of hyperedges.
+        Every hyperedge is represented as a list of nodes.
+    shape: the shape of the adjacency matrix, passed to the array constructor.
+        Should be of the form (E, N)
+
+    Returns
+    -------
+    The binary incidence matrix representing the hyperedges.
+    """
+    len_list = [0] + [len(hye) for hye in hye_list]
+    indptr = np.cumsum(len_list)
+
+    indices = list(chain(*hye_list))
+    if data is None:
+        data = np.ones_like(indices)
+
+    return sparse.csr_array((data, indices, indptr), shape=shape)
