@@ -1,7 +1,9 @@
 from typing import Iterable, List, Optional, Tuple, Union, Dict
 import time
+from utils import hye_list_to_binary_incidence
 
 import numpy as np
+from scipy import sparse
 
 class FW:
     """
@@ -85,9 +87,12 @@ class FW:
             N = max(map(max, edges)) + 1
         if self.x is None:
             self.x = self._init_x(N, seed)
-        self.of_value = self.calc_obj_function(edges)
         K = len(edges[0])
         self.tau *= 1 / (K * (K - 1))
+        self.K = K
+        self.E = len(edges)
+        self.binary_incidence = hye_list_to_binary_incidence(edges, (len(edges), N))
+        self.of_value = self.calc_obj_function()
 
         max_iter, tolerance = self.max_iter, self.tolerance
         
@@ -100,7 +105,7 @@ class FW:
         start_time = time.time()
         for iter in range(max_iter):
             self.training_iter = iter
-            s, d_fw, grad, duality_gap = self._global_step(edges)
+            s, d_fw, grad, duality_gap = self._global_step()
             self.history["duality_gap"].append(-duality_gap)
             if duality_gap >= -tolerance:
                 self.trained = True
@@ -108,9 +113,9 @@ class FW:
                 break
 
             if self.ssc_procedure:
-                self.x, self.of_value = self._SSC_step(edges, grad, s, duality_gap)
+                self.x, self.of_value = self._SSC_step(grad, s, duality_gap)
             else:
-                self.x, self.of_value = self._FW_step(edges, grad, d_fw, s, duality_gap)
+                self.x, self.of_value = self._FW_step(grad, d_fw, s, duality_gap)
 
             iter_time = time.time()
             self.history["iteration"].append(iter+1)
@@ -124,10 +129,10 @@ class FW:
         x = x / x.sum()
         return x
     
-    def _global_step(self, edges: List[List[int]]) -> Tuple[np.ndarray, np.ndarray, np.ndarray, float]:
+    def _global_step(self) -> Tuple[np.ndarray, np.ndarray, np.ndarray, float]:
         """Performs the global step of the FW algorithm."""
         x = self.x
-        grad = self.calc_gradient(edges)
+        grad = self.calc_gradient()
         s = LMO(grad)
         d_fw = s - x
         duality_gap = grad @ d_fw
@@ -135,7 +140,6 @@ class FW:
 
     def _FW_step(
         self, 
-        edges: List[List[int]],
         grad: np.ndarray,
         d_fw: np.ndarray,
         s: np.ndarray,
@@ -153,11 +157,10 @@ class FW:
             d, gap, gamma_max = self._blended_pairwise_step(grad, s, duality_gap, x)
         else:
             raise NotImplementedError("Currently ony classic, pairwise and blended_pairwise FW variants are available")
-        return self._choose_stepsize(edges, d, gap, gamma_max)
+        return self._choose_stepsize(d, gap, gamma_max)
     
     def _SSC_step(
         self, 
-        edges: List[List[int]],
         grad: np.ndarray,
         s: np.ndarray,
         duality_gap: float,
@@ -181,10 +184,10 @@ class FW:
             else:
                 raise NotImplementedError("This variant is currently not supported for the SSC procedure.")
             
-            if self._global_maximum_reached(edges, d, gap, y, of_value):
+            if self._global_maximum_reached(d, gap, y, of_value):
                 return y, of_value
 
-            y, of_value, beta, L = self.backtracking(edges, d, gap, gamma_max, L, y, of_value)
+            y, of_value, beta, L = self.backtracking(d, gap, gamma_max, L, y, of_value)
             if beta < gamma_max:
                 return y, of_value
             assert iter < 1000, "The while loop in SSC exceeded 1000 iterations."
@@ -251,7 +254,6 @@ class FW:
         return d, gap, gamma_max
     
     def _choose_stepsize(self,
-        edges: List[List[int]],
         d: np.ndarray, 
         gap: float,
         gamma_max: float,
@@ -259,12 +261,12 @@ class FW:
         """Chooses the step size according to the selected strategy."""
         stepsize_strategy = self.stepsize_strategy
         if stepsize_strategy == 'armijo':
-            return self.armijo(edges, d, gap, gamma_max)
+            return self.armijo(d, gap, gamma_max)
         elif stepsize_strategy == 'armijo decreasing':
             gamma_max = min(self.gamma_max, gamma_max)
-            return self.armijo(edges, d, gap, gamma_max)
+            return self.armijo(d, gap, gamma_max)
         elif stepsize_strategy == 'backtracking':
-            x_new, of_new, gamma, L = self.backtracking(edges, d, gap, gamma_max, self.L)
+            x_new, of_new, gamma, L = self.backtracking(d, gap, gamma_max, self.L)
             self.L = L
             return x_new, of_new
         elif stepsize_strategy == 'decreasing':
@@ -272,40 +274,39 @@ class FW:
             x, iter = self.x, self.training_iter
             gamma = 2 / (3 + iter)
             x = x + gamma * d
-            of_new = self.calc_obj_function(edges, x)
+            of_new = self.calc_obj_function(x)
             return x, of_new
         else:
             raise NotImplementedError('The stepsize strategy is not implemented.')
-    
-    def calc_obj_function(self, edges: List[List[int]], x: Optional[np.ndarray] = None) -> np.ndarray:
+        
+    def calc_obj_function(self, x: Optional[np.ndarray] = None) -> float:
         """Calculated the value of the objective function."""
-        tau = self.tau
+        tau, binary_incidence, K, E = self.tau, self.binary_incidence, self.K, self.E
         if x is None:
             x = self.x
-        k = len(edges[0])
-        LG = x[edges].prod(axis=1).sum()
-        return LG + tau * (x ** k).sum()
-
-    def calc_gradient(self, edges: List[List[int]]) -> np.ndarray:
+        bi_x = binary_incidence.multiply(x).tocsr()
+        bi_x = bi_x[binary_incidence.nonzero()].reshape(E, K)
+        LG = bi_x.prod(axis=1).sum()
+        return LG + tau * (x ** K).sum()
+    
+    def calc_gradient(self) -> np.ndarray:
         """Calculates the value of the gradient."""
-        x, tau = self.x, self.tau
-        N = len(x)
+        x, tau, binary_incidence, K, E  = self.x, self.tau, self.binary_incidence, self.K, self.E
 
-        hg_matrix = x[edges]
-        hg_indices = np.array(edges)
-        e, k = hg_matrix.shape
+        bi_x = binary_incidence.multiply(x).tocsr()
+        hg_matrix = bi_x[binary_incidence.nonzero()].reshape(E, K)
+
         remaining_products = np.zeros(hg_matrix.shape)
-        for i in range(k):
+        for i in range(K):
             new_matrix = hg_matrix.copy()
-            new_matrix[:,i] = np.ones(e)
+            new_matrix[:,i] = np.ones(E)
             remaining_products[:,i] = new_matrix.prod(axis=1)
-        grad = np.zeros(N)
-        for i in range(N):
-            grad[i] = remaining_products[hg_indices == i].sum()
-        return grad + tau * k * (x ** (k - 1))
+
+        grad_binary_incidence = sparse.csr_array((remaining_products.flatten(), binary_incidence.indices, binary_incidence.indptr))
+        grad = grad_binary_incidence.sum(axis=0)
+        return grad + tau * K * (x ** (K - 1))
     
     def backtracking(self, 
-        edges: List[List[int]], 
         d: np.ndarray, 
         gap: float,
         gamma_max: np.ndarray,
@@ -345,18 +346,17 @@ class FW:
         gamma = - gap / (L * d_norm_squared)
         gamma = min(gamma_max, gamma)
         x_new = x + gamma * d
-        of_value_new = self.calc_obj_function(edges, x_new)
+        of_value_new = self.calc_obj_function(x_new)
         while of_value_new > Q_t(of_value_old, gamma, gap, L, d_norm_squared):
             L *= tau
             gamma_new = - gap / (L * d_norm_squared)
             gamma = min(gamma_new, gamma_max)
             x_new = x + gamma * d
-            of_value_new = self.calc_obj_function(edges, x_new)
+            of_value_new = self.calc_obj_function(x_new)
         return x_new, of_value_new, gamma, L
     
     def _global_maximum_reached(
         self,
-        edges: List[List[int]],
         d: np.ndarray, 
         gap: float,
         y: np.ndarray,
@@ -364,13 +364,12 @@ class FW:
         gamma_min: Optional[float] = 1e-6,
     ) -> bool:
         """Checks if the current value of y in the SSC procedure is the global minimum."""
-        if self.calc_obj_function(edges, y + gamma_min * d) > (of_value_old + gamma_min * gap / 2):
+        if self.calc_obj_function(y + gamma_min * d) > (of_value_old + gamma_min * gap / 2):
             return True
         else:
             return False
     
     def armijo(self,
-            edges: List[List[int]],
             d: np.ndarray, 
             gap: float,
             gamma_max: np.ndarray,) -> Tuple[np.ndarray, float]:
@@ -393,13 +392,13 @@ class FW:
 
         gamma = gamma_max
         x_new = x_old + gamma * d
-        of_new = self.calc_obj_function(edges, x_new)
+        of_new = self.calc_obj_function(x_new)
         m = 0
         while of_new > of_old + alpha * gamma * gap:
             m += 1
             gamma = delta * gamma
             x_new = x_old + gamma * d
-            of_new = self.calc_obj_function(edges, x_new)
+            of_new = self.calc_obj_function(x_new)
             assert m < 10000, "Armijo made 10 000 iteration, something must be wrong"
         self.gamma_max = gamma
         return x_new, of_new
