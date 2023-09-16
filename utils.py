@@ -1,5 +1,5 @@
 from itertools import combinations, chain
-from typing import List, Tuple, Optional, Union
+from typing import List, Tuple, Optional
 
 import numpy as np
 from scipy import sparse
@@ -61,7 +61,11 @@ def process_dataset(dataset: str, k: int) -> Tuple[int, List[List], List[List]]:
                 complement_hyperedges.append(comb)
         return n, hyperedges, complement_hyperedges
     
-def plot_hisotry(df: pd.DataFrame, seed: int, ssc: Optional[bool]=False, size: Optional[int]=8, title: Optional[bool]=True):
+def plot_hisotry(df: pd.DataFrame, 
+                 seed: int, 
+                 ssc: Optional[bool]=False, 
+                 size: Optional[int]=8, 
+                 title: Optional[bool]=True):
     """The function to plot the history of the specific run of the algorithm based on seed.
     The plots the ssc=True plot the dashed line for the run with SSC procedure."""
     
@@ -109,6 +113,7 @@ def hye_list_to_binary_incidence(
         Every hyperedge is represented as a list of nodes.
     shape: the shape of the adjacency matrix, passed to the array constructor.
         Should be of the form (E, N)
+    data: the data to fill the matrix with. If none, fills with all 1.
 
     Returns
     -------

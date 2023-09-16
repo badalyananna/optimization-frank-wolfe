@@ -319,10 +319,10 @@ class FW:
 
         Paramters
         ---------
-        edges: the complement hyperedges of the hypergraph
         d: the descent direction provided by FW algorithm
         gap: the current duality gap with the diven direction and current value of x
         gamma_max: maximum allowed value of gamma
+        L_prev: previous value of the Lipscitz constant
         x: current value of x, if not provided the value of the last iteration is taked
         of_value_old: the value of the objecive function corresponding to the, if not provided
             the value of the o.f. of the last iteration is taken
@@ -380,8 +380,8 @@ class FW:
 
         Paremeters
         ----------
-        edges: list of lists containing the id of the nodes belinging to edges
         d: the descent direction of the algorithm
+        edges: list of lists containing the id of the nodes belinging to edges
         gap: the duality gap at the current iteration of the algorithm
         
 
