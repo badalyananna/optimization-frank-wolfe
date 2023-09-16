@@ -184,7 +184,7 @@ class FW:
             else:
                 raise NotImplementedError("This variant is currently not supported for the SSC procedure.")
             
-            if self._global_maximum_reached(d, gap, y, of_value):
+            if self._global_minimum_reached(d, gap, y, of_value):
                 return y, of_value
 
             y, of_value, beta, L = self.backtracking(d, gap, gamma_max, L, y, of_value)
@@ -357,7 +357,7 @@ class FW:
                 of_value_new = self.calc_obj_function(x_new)
         return x_new, of_value_new, gamma, L
     
-    def _global_maximum_reached(
+    def _global_minimum_reached(
         self,
         d: np.ndarray, 
         gap: float,
