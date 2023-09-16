@@ -62,7 +62,7 @@ def process_dataset(dataset: str, k: int) -> Tuple[int, List[List], List[List]]:
         return n, hyperedges, complement_hyperedges
     
 def plot_hisotry(df: pd.DataFrame, 
-                 seed: int, 
+                 seed: Optional[int]=False, 
                  ssc: Optional[bool]=False, 
                  size: Optional[int]=8, 
                  title: Optional[bool]=True):
@@ -70,7 +70,11 @@ def plot_hisotry(df: pd.DataFrame,
     The plots the ssc=True plot the dashed line for the run with SSC procedure."""
     
     fig, axes = plt.subplots(nrows=2, ncols=2, figsize=(size, size), sharex='col', sharey='row')
-    dfs = df[df.seed==seed]
+    if seed:
+        dfs = df[df.seed==seed]
+    else: 
+        dfs = df
+
     assert len(dfs) > 0, "The dataframe is empty. Probably the seed doesn't exist"
     for i in range(2):
         for j in range(2):
@@ -91,10 +95,10 @@ def plot_hisotry(df: pd.DataFrame,
             ax.set_xlabel(x_name)
     if ssc:
         fig.legend(handles, labels, loc="upper right", frameon=False)
-        if title: fig.suptitle('Performance of FW variants with and without SSC procedure', fontsize=12, y=0.95)
+        if title: fig.suptitle('Performance of FW variants with and without SSC procedure', fontsize=12, y=1)
     else:
         fig.legend(handles, labels, title='Variant', loc="upper right", frameon=False)
-        if title: fig.suptitle('Performance of FW variants', fontsize=12, y=0.95)
+        if title: fig.suptitle('Performance of FW variants', fontsize=12, y=1)
 
     plt.tight_layout()  # Adjust spacing between subplots
     plt.show()
