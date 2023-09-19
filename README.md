@@ -1,6 +1,6 @@
 # Frank-Wolfe variants for cluster detection on hypergraphs
 
-The repository implements 4 Frank-Wolfe variants to solve maximum clique problem on hypergraph:
+The repository implements 4 Frank-Wolfe variants to solve maximum clique problem on hypergraphs:
 - Classic Frank-Wolfe (FW)
 - Away-Step Frank-Wolfe (AFW)
 - Pairwise Frank-Wolfe (PFW)
