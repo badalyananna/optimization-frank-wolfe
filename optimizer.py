@@ -7,7 +7,7 @@ from scipy import sparse
 
 class FW:
     """
-    Implements the Frank Wolfe algorithms and its variants for the maximum click on hypergraphs problem
+    Implements the Frank Wolfe algorithm and its variants for the maximum click on hypergraphs problem
     """
     def __init__(
         self,
@@ -25,7 +25,7 @@ class FW:
 
         Parameters
         ----------
-        variant: the FW variant. The following variants are implemented: #TODO add papers
+        variant: the FW variant. The following variants are implemented:
             'FW': classic FW
             'AFW': away step FW
             'PFW': pairwise FW
