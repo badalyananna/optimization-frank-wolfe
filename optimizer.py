@@ -156,11 +156,11 @@ class FW:
         elif self.variant == 'BPFW':
             d, gap, gamma_max = self._blended_pairwise_step(grad, s, duality_gap, x)
         else:
-            raise NotImplementedError("Currently ony classic, pairwise and blended_pairwise FW variants are available")
+            raise NotImplementedError("Currently only classic (FW), away step (AFW), pairwise (PFW) and blended pairwise (BPFW) Frank Wolfe variants are available")
         return self._choose_stepsize(d, gap, gamma_max)
     
     def _SSC_step(
-        self, 
+        self,
         grad: np.ndarray,
         s: np.ndarray,
         duality_gap: float,
@@ -366,10 +366,7 @@ class FW:
         gamma_min: Optional[float] = 1e-6,
     ) -> bool:
         """Checks if the current value of y in the SSC procedure is the global minimum."""
-        if self.calc_obj_function(y + gamma_min * d) > (of_value_old + gamma_min * gap / 2):
-            return True
-        else:
-            return False
+        return self.calc_obj_function(y + gamma_min * d) > (of_value_old + gamma_min * gap / 2)
     
     def armijo(self,
             d: np.ndarray, 
